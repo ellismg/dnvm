@@ -64,14 +64,23 @@ __dnvm_current_os()
 }
 
 __dnvm_find_latest() {
-    local platform="mono"
+    local runtime="$1"
+    local arch="$2"
+    local platformId=
 
     if ! __dnvm_has "curl"; then
         printf "%b\n" "${Red}$_DNVM_COMMAND_NAME needs curl to proceed. ${RCol}" >&2;
         return 1
     fi
 
-    local url="$DNX_ACTIVE_FEED/GetUpdates()?packageIds=%27$_DNVM_RUNTIME_PACKAGE_NAME-$platform%27&versions=%270.0%27&includePrerelease=true&includeAllVersions=false"
+    if [[ $runtime == "mono" ]]; then
+        local platformId="$_DNVM_RUNTIME_PACKAGE_NAME-$runtime"
+    else
+        local os=$(__dnvm_current_os)
+        local platformId="$_DNVM_RUNTIME_PACKAGE_NAME-$runtime-$os-$arch"
+    fi
+
+    local url="$DNX_ACTIVE_FEED/GetUpdates()?packageIds=%27$platformId%27&versions=%270.0%27&includePrerelease=true&includeAllVersions=false"
     xml="$(curl $url 2>/dev/null)"
     echo $xml | grep \<[a-zA-Z]:Version\>* >> /dev/null || return 1
     version="$(echo $xml | sed 's/.*<[a-zA-Z]:Version>\([^<]*\).*/\1/')"
@@ -285,6 +294,8 @@ __dnvm_help() {
     echo "  set installed version as default"
     echo "  -f|forces         force upgrade. Overwrite existing version of $_DNVM_RUNTIME_SHORT_NAME if already installed"
     echo "  -u|unstable       use unstable feed. Installs the $_DNVM_RUNTIME_SHORT_NAME from the unstable unstable feed"
+    echo "  -r|-runtime       runtime to use (mono, coreclr)"
+    echo "  -arch             architecture to use (x64)"
     echo ""
    printf "%b\n" "${Yel}$_DNVM_COMMAND_NAME install <semver>|<alias>|<nupkg>|latest [-a|-alias <alias>] [-p|-persistent] [-f|-force] [-u|-unstable] ${RCol}"
     echo "  <semver>|<alias>  install requested $_DNVM_RUNTIME_SHORT_NAME from feed"
@@ -294,6 +305,8 @@ __dnvm_help() {
     echo "  -p|-persistent    set installed version as default"
     echo "  -f|force          force install. Overwrite existing version of $_DNVM_RUNTIME_SHORT_NAME if already installed"
     echo "  -u|unstable       use unstable feed. Installs the $_DNVM_RUNTIME_SHORT_NAME from the unstable unstable feed"
+    echo "  -r|-runtime       runtime to use (mono, coreclr)"
+    echo "  -arch             architecture to use (x64)"
     echo ""
     echo "  adds $_DNVM_RUNTIME_SHORT_NAME bin to path of current command line"
     echo ""
@@ -362,7 +375,7 @@ dnvm()
 
         "upgrade" )
             shift
-            $_DNVM_COMMAND_NAME install latest -p $1
+            $_DNVM_COMMAND_NAME install latest -p "$@"
         ;;
 
         "install" )
@@ -371,14 +384,23 @@ dnvm()
             local persistent=
             local versionOrAlias=
             local alias=
+            local arch=
             local force=
             local unstable=
+            local runtime=
+
             while [ $# -ne 0 ]
             do
                 if [[ $1 == "-p" || $1 == "-persistent" ]]; then
                     local persistent="-p"
                 elif [[ $1 == "-a" || $1 == "-alias" ]]; then
                     local alias=$2
+                    shift
+                elif [[ $1 == "-arch" ]]; then
+                    local arch=$2
+                    shift
+                elif [[ $1 == "-r" || $1 == "-runtime" ]]; then
+                    local runtime=$2
                     shift
                 elif [[ $1 == "-f" || $1 == "-force" ]]; then
                     local force="-f"
@@ -407,15 +429,22 @@ dnvm()
                 fi
             fi
 
-            if ! __dnvm_has "mono"; then
-               printf "%b\n" "${Yel}It appears you don't have Mono available. Remember to get Mono before trying to run $DNVM_RUNTIME_SHORT_NAME application. ${RCol}" >&2;
+            if [[ $runtime == "mono" || -z "$runtime" ]]; then
+                local runtime="mono"
+                local arch=""
+
+                if ! __dnvm_has "mono"; then
+                    printf "%b\n" "${Yel}It appears you don't have Mono available. Remember to get Mono before trying to run $DNVM_RUNTIME_SHORT_NAME application. ${RCol}" >&2;
+                fi
+            elif [[ -z "$arch" ]]; then
+                local arch="x64"
             fi
 
             if [[ "$versionOrAlias" == "latest" ]]; then
                 echo "Determining latest version"
-                versionOrAlias=$(__dnvm_find_latest)
+                versionOrAlias=$(__dnvm_find_latest "$runtime" "$arch")
                 [[ $? == 1 ]] && echo "Error: Could not find latest version from feed $DNX_ACTIVE_FEED" && return 1
-               printf "%b\n" "Latest version is ${Cya}$versionOrAlias ${RCol}"
+                printf "%b\n" "Latest version is ${Cya}$versionOrAlias ${RCol}"
             fi
 
             if [[ "$versionOrAlias" == *.nupkg ]]; then
@@ -441,12 +470,12 @@ dnvm()
                 $_DNVM_COMMAND_NAME use "$runtimeVersion" "$persistent" -r "$runtimeClr"
                 [[ -n $alias ]] && $_DNVM_COMMAND_NAME alias "$alias" "$runtimeVersion"
             else
-                local runtimeFullName="$(__dnvm_requested_version_or_alias $versionOrAlias)"
+                local runtimeFullName="$(__dnvm_requested_version_or_alias $versionOrAlias $runtime $arch)"
                 local runtimeFolder="$_DNVM_USER_PACKAGES/$runtimeFullName"
                 __dnvm_download "$runtimeFullName" "$runtimeFolder" "$force"
                 [[ $? == 1 ]] && return 1
-                $_DNVM_COMMAND_NAME use "$versionOrAlias" "$persistent"
-                [[ -n $alias ]] && $_DNVM_COMMAND_NAME alias "$alias" "$versionOrAlias"
+                $_DNVM_COMMAND_NAME use "$runtimeFullName" "$persistent"
+                [[ -n $alias ]] && $_DNVM_COMMAND_NAME alias "$alias" "$runtimeFullName"
             fi
         ;;
 
